@@ -4,15 +4,17 @@ import socket
 import logging
 import numpy as np
 from io import BytesIO
+import struct
 
 
 class NumpySocket():
-    def __init__(self):
+    def __init__(self, timeout=30):
         self.address = 0
         self.port = 0
         self.client_connection = self.client_address = None
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.socket.settimeout(timeout)
 
     def __del__(self):
         try:
@@ -31,7 +33,7 @@ class NumpySocket():
 
         self.socket.bind((self.address, self.port))
         self.socket.listen(1)
-        
+
         logging.debug("waiting for a connection")
         self.client_connection, self.client_address = self.socket.accept()
         logging.debug(f"connected to: {self.client_address[0]}")
@@ -43,7 +45,8 @@ class NumpySocket():
             self.socket.connect((self.address, self.port))
             logging.debug(f"Connected to {self.address} on port {self.port}")
         except socket.error as err:
-            logging.error(f"Connection to {self.address} on port {self.port} failed")
+            logging.error(
+                f"Connection to {self.address} on port {self.port} failed")
             raise
 
     def close(self):
@@ -58,10 +61,9 @@ class NumpySocket():
     def __pack_frame(frame):
         f = BytesIO()
         np.savez(f, frame=frame)
-        
+
         packet_size = len(f.getvalue())
-        header = '{0}:'.format(packet_size)
-        header = bytes(header.encode())  # prepend length of array
+        header = struct.pack('>I', packet_size)  # prepend length of array
 
         out = bytearray()
         out += header
@@ -88,7 +90,6 @@ class NumpySocket():
 
         logging.debug("frame sent")
 
-
     def recieve(self, socket_buffer_size=1024):
         socket = self.socket
         if(self.client_connection):
@@ -103,12 +104,11 @@ class NumpySocket():
                 break
             while True:
                 if length is None:
-                    if b':' not in frameBuffer:
-                        break
                     # remove the length bytes from the front of frameBuffer
                     # leave any remaining bytes in the frameBuffer!
-                    length_str, ignored, frameBuffer = frameBuffer.partition(b':')
-                    length = int(length_str)
+                    length_str = frameBuffer[:4]
+                    frameBuffer = frameBuffer[4:]
+                    length = struct.unpack('>I', length_str)[0]
                 if len(frameBuffer) < length:
                     break
                 # split off the full message from the remaining bytes
@@ -116,7 +116,7 @@ class NumpySocket():
                 frameBuffer = frameBuffer[length:]
                 length = None
                 break
-        
-        frame = np.load(BytesIO(frameBuffer))['frame']
+
+        frame = np.load(BytesIO(frameBuffer), allow_pickle=True)['frame']
         logging.debug("frame received")
         return frame
